@@ -351,13 +351,35 @@ class SettingsActionScreen(BaseScreen):
             action_ctx["ui"]["show_district"] = True
             action_ctx["ui"]["resources_editable"] = True
 
+            # Load politician information for ideology influence
+            politician_info = None
+            if action_obj and action_obj.district_id:
+                politicians = await Politician.by_district(session, action_obj.district_id)
+                if politicians:
+                    pol = politicians[0]  # Take first politician for the district
+                    politician_info = {
+                        "name": pol.name,
+                        "ideology": pol.ideology,
+                        "ideology_bar": ideology_bar(pol.ideology),
+                        "role_and_influence": pol.role_and_influence,
+                    }
+            action_ctx["politician"] = politician_info
+            action_ctx["ideology_direction"] = getattr(action_obj, "ideology_direction", 0) if action_obj else 0
+
             is_help = (action_ctx.get("type") or "").lower() == "support"
+            # Show ideology direction buttons if action has influence and politician
+            show_ideology_buttons = (
+                action_obj and 
+                action_obj.influence > 0 and 
+                politician_info is not None
+            )
             keyboard = action_setup_kb(
                 resources_for_kb,
                 action_ctx["id"],
                 action_ctx["status"],
                 is_help=is_help,
                 is_list=is_list,
+                show_ideology_direction=show_ideology_buttons,
             )
 
         elif kind == "scout":
@@ -397,6 +419,19 @@ class SettingsActionScreen(BaseScreen):
                 is_list=is_list,
             )
 
+        elif kind == "ritual":
+            action_ctx["ui"]["show_type_switch"] = False
+            action_ctx["ui"]["show_district"] = False
+            action_ctx["ui"]["resources_editable"] = True
+
+            resources_for_kb = ["candles"]
+            keyboard = action_setup_kb(
+                resources_for_kb,
+                action_ctx["id"],
+                action_ctx["status"],
+                is_list=is_list,
+            )
+
         else:
             # запасной вариант — как defend
             keyboard = action_setup_kb(
@@ -419,6 +454,12 @@ class SettingsActionScreen(BaseScreen):
 
         return {
             "action": action_ctx,
+            "user": {
+                "information": user.information,
+                "influence": user.influence,
+                "money": user.money,
+                "force": user.force,
+            },
             "keyboard": keyboard,
             "list_info": list_info,
         }

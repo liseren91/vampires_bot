@@ -27,12 +27,18 @@
 {% set r = action.resources or {} %}
 {% if is_scout %}<b>🔧 Стоимость:</b> {{ res_row("🧠","информация",r.information|default(1)) }}
 {% elif resources_only_info %}<b>🔧 Ресурсы:</b> {{ res_row("🧠","информация",r.information) }}
+<b>📊 Доступно:</b> информация: {{ user.information|default(0) }}
 {% elif show_resources_all %}{% if nonzero(r) %}<b>🔧 Ресурсы:</b>
 {{ res_row("💪","сила",r.force) }}
 {{ res_row("💰","деньги",r.money) }}
 {{ res_row("🪙","влияние",r.influence) }}
 {{ res_row("🧠","информация",r.information) }}
-{% else %}<b>🔧 Ресурсы:</b> всё по нулям{% endif %}{% endif %}
+{% else %}<b>🔧 Ресурсы:</b> всё по нулям{% endif %}
+
+{% if action.politician and r.influence > 0 %}<b>🏛 Политик района:</b> {{ action.politician.name }}
+<b>📊 Текущая идеология:</b> {{ action.politician.ideology }} {{ action.politician.ideology_bar }}
+<b>🎯 Направление влияния:</b> {% if action.ideology_direction == 1 %}➕ к реформам{% elif action.ideology_direction == -1 %}➖ к консерватизму{% else %}не выбрано{% endif %}
+{% endif %}{% endif %}
 
 {% if show_type %}
   {% if action.support and action.support.is_support %}

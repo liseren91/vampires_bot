@@ -55,6 +55,7 @@ COMBAT_RATES_PATH = os.getenv("COMBAT_RATES_PATH", "./config/combat_rates.json")
 ATTACK_KIND = "attack"
 DEFENSE_KIND = "defense"
 SCOUT_KINDS = {"scout_dist", "scout_info"}
+RITUAL_KINDS = {"ritual"}
 
 ORDER_ATTACKS_ASC = True  # порядок атак по created_at
 
@@ -649,6 +650,144 @@ async def close_all_scouting(session: AsyncSession):
 
 
 # ===========================
+#     PROCESS EXPIRED RITUALS
+# ===========================
+async def process_expired_rituals(session: AsyncSession):
+    """
+    Проверяет и закрывает ритуалы, время которых истекло.
+    Эта функция должна вызываться периодически (например, каждые 5 минут).
+    """
+    from datetime import datetime, timezone
+    
+    current_time = datetime.now(timezone.utc)
+    
+    # Найти все активные ритуалы с истёкшим временем
+    stmt = select(Action).where(
+        Action.status == ActionStatus.PENDING,
+        Action.kind.in_(RITUAL_KINDS),
+        Action.ritual_end_time.is_not(None),
+        Action.ritual_end_time <= current_time
+    )
+    res = await session.execute(stmt)
+    expired_rituals: List[Action] = list(res.scalars().all())
+    
+    if not expired_rituals:
+        return
+    
+    log.info(f"Обнаружено {len(expired_rituals)} завершённых ритуалов")
+    
+    # Бот для уведомлений (если есть)
+    try:
+        from app import bot  # type: ignore
+    except Exception:
+        bot = None
+        log.warning("Бот недоступен: уведомления о завершении ритуалов отправляться не будут.")
+    
+    # Закрываем завершённые ритуалы
+    ritual_ids = [action.id for action in expired_rituals]
+    await session.execute(
+        update(Action).where(Action.id.in_(ritual_ids)).values(
+            status=ActionStatus.DONE, 
+            updated_at=current_time
+        )
+    )
+    
+    # Уведомляем участников ритуалов о завершении (только самих участников)
+    if bot:
+        for action in expired_rituals:
+            user = await session.get(User, action.owner_id)
+            if user:
+                candles_used = getattr(action, 'candles', 0) or 0
+                duration_hours = candles_used * 10 // 60  # примерно часы
+                duration_minutes = (candles_used * 10) % 60
+                
+                duration_text = ""
+                if duration_hours > 0:
+                    duration_text += f"{duration_hours}ч "
+                if duration_minutes > 0:
+                    duration_text += f"{duration_minutes}мин"
+                
+                body = (
+                    f"Ваш ритуал завершён.\n\n"
+                    f"🕯️ Использовано свечей: {candles_used}\n"
+                    f"⏱️ Продолжительность: {duration_text.strip()}\n"
+                    f"📍 Место: {action.text[:100] if action.text else 'Не указано'}\n\n"
+                    f"Результаты ритуала могут повлиять на дальнейшие события в игре."
+                )
+                await notify_user(bot, user.tg_id, title="🕯️ Ритуал завершён", body=body)
+    
+    await session.commit()
+    log.info(f"Закрыто {len(expired_rituals)} завершённых ритуалов")
+
+
+# ===========================
+#  IDEOLOGY CHANGES
+# ===========================
+async def apply_ideology_changes(session: AsyncSession):
+    """
+    Apply ideology changes from pending influence actions.
+    This processes all PENDING actions that have influence + ideology_direction.
+    """
+    with StepTimer("Применение изменений идеологии"):
+        # Get all pending actions with ideology direction
+        stmt = select(Action).where(
+            Action.status == ActionStatus.PENDING,
+            Action.influence > 0,
+            Action.ideology_direction != 0,
+            Action.district_id.is_not(None),
+            Action.kind.in_(["attack", "defend"])
+        )
+        res = await session.execute(stmt)
+        ideology_actions: List[Action] = list(res.scalars().all())
+        
+        if not ideology_actions:
+            log.info("Нет действий с изменением идеологии")
+            return
+        
+        log.info(f"Обработка {len(ideology_actions)} действий с изменением идеологии")
+        
+        # Group by district and accumulate ideology changes
+        ideology_effects: Dict[int, int] = defaultdict(int)
+        processed_action_ids: List[int] = []
+        
+        for action in ideology_actions:
+            if not action.district_id:
+                continue
+                
+            ideology_change = action.influence * action.ideology_direction
+            ideology_effects[action.district_id] += ideology_change
+            processed_action_ids.append(action.id)
+            
+            log.debug(f"Action {action.id}: +{ideology_change} ideology to district {action.district_id}")
+        
+        # Apply accumulated ideology changes to politicians
+        politicians_updated = 0
+        for district_id, total_change in ideology_effects.items():
+            if total_change == 0:
+                continue
+                
+            # Get politician for this district
+            pol_stmt = select(Politician).where(Politician.district_id == district_id)
+            pol_res = await session.execute(pol_stmt)
+            politician = pol_res.scalars().first()
+            
+            if politician:
+                old_ideology = politician.ideology
+                new_ideology = max(-5, min(5, politician.ideology + total_change))
+                
+                if new_ideology != old_ideology:
+                    politician.ideology = new_ideology
+                    politician.updated_at = now_utc()
+                    politicians_updated += 1
+                    
+                    log.info(f"Ideology change: {politician.name} {old_ideology} → {new_ideology} (change: {total_change})")
+        
+        # Don't mark actions as DONE here - they will be processed later by attack resolution
+        await session.commit()
+        log.info(f"Идеология обновлена у {politicians_updated} политиков, обработано {len(processed_action_ids)} действий")
+
+
+# ===========================
 #  IDEOLOGY MULTIPLIER
 # ===========================
 def ideology_multiplier(owner_ideol: int, pol_ideol: Optional[int]) -> float:
@@ -941,6 +1080,9 @@ async def run_game_cycle():
             with StepTimer("Шаг 1: Резерв обороны"):
                 defense_pool = await resolve_defense_pools(session, rates, contested)
 
+            with StepTimer("Шаг 1.5: Применение изменений идеологии"):
+                await apply_ideology_changes(session)
+
             with StepTimer("Шаг 2: Резолв атак"):
                 await resolve_attacks(session, rates, defense_pool, contested)
 
@@ -949,6 +1091,9 @@ async def run_game_cycle():
 
             with StepTimer("Шаг 3: Закрыть все разведки"):
                 await close_all_scouting(session)
+
+            with StepTimer("Шаг 3.5: Обработка завершённых ритуалов"):
+                await process_expired_rituals(session)
 
             with StepTimer("Шаг 4: Пересчёт ресурсных множителей"):
                 await recalc_resource_multipliers(session)

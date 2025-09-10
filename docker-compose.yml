@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: vampires_bot_db
+    environment:
+      POSTGRES_DB: vampires_bot
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: bot_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_user -d vampires_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  vampires_bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vampires_bot
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://bot_user:bot_password@postgres:5432/vampires_bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Optional: mount logs directory if you want to see logs locally
+      - ./logs:/app/logs
+    restart: unless-stopped
+    # For development, you might want to run with a shell or keep it running
+    tty: true
+    stdin_open: true
+
+volumes:
+  postgres_data:

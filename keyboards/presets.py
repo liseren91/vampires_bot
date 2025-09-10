@@ -17,7 +17,7 @@ def actions_menu_kb() -> KeyboardSpec:
     return KeyboardSpec(
         type="inline",
         name="actions_menu",
-        options=["defend", "attack", "scout", "communicate", ["actions_list"], ["back"]],
+        options=["defend", "attack", "scout", "communicate", "ritual", ["actions_list"], ["back"]],
         params=KeyboardParams(max_in_row=2)
     )
 
@@ -55,6 +55,7 @@ def action_setup_kb(
     communicate: bool = False,
     is_help: bool = False,
     is_list: bool = False,           # <--- НОВОЕ
+    show_ideology_direction: bool = False,  # <--- NEW for ideology direction
 ) -> KeyboardSpec:
     """
     Строит inline-клавиатуру для настройки действия.
@@ -71,6 +72,9 @@ def action_setup_kb(
                 res = res.strip()
                 if res:
                     rows.append([f"{res}_remove", res, f"{res}_add"])
+            # Add ideology direction buttons for influence in attack/defend actions
+            if show_ideology_direction:
+                rows.append(["ideology_conservative", "ideology_reforms"])
             rows.append(["moving_on_point"])
             rows.append(["done"])
             rows.append(["delete", "back"])

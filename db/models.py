@@ -56,20 +56,20 @@ class User(Base):
 
     language_code: Mapped[Optional[str]] = mapped_column(String(16))
 
-    money: Mapped[int] = mapped_column(default=0, nullable=False)
-    influence: Mapped[int] = mapped_column(default=0, nullable=False)
-    information: Mapped[int] = mapped_column(default=0, nullable=False)
-    force: Mapped[int] = mapped_column(default=0, nullable=False)
+    money: Mapped[int] = mapped_column(default=2, nullable=False)
+    influence: Mapped[int] = mapped_column(default=2, nullable=False)
+    information: Mapped[int] = mapped_column(default=2, nullable=False)
+    force: Mapped[int] = mapped_column(default=1, nullable=False)
 
-    base_money: Mapped[int] = mapped_column(default=0, nullable=False)
-    base_influence: Mapped[int] = mapped_column(default=0, nullable=False)
-    base_information: Mapped[int] = mapped_column(default=0, nullable=False)
-    base_force: Mapped[int] = mapped_column(default=0, nullable=False)
+    base_money: Mapped[int] = mapped_column(default=2, nullable=False)
+    base_influence: Mapped[int] = mapped_column(default=2, nullable=False)
+    base_information: Mapped[int] = mapped_column(default=2, nullable=False)
+    base_force: Mapped[int] = mapped_column(default=1, nullable=False)
 
     # НОВОЕ
     ideology: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # -5..+5
     faction: Mapped[Optional[str]] = mapped_column(String(64))  # простой текст
-    available_actions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)  # сколько слотов
+    available_actions: Mapped[int] = mapped_column(Integer, default=5, nullable=False)  # сколько слотов
     max_available_actions: Mapped[int] = mapped_column(Integer, default=5, nullable=True)  # сколько слотов
     actions_refresh_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -118,18 +118,52 @@ class User(Base):
             language_code: Optional[str] = None,
             **extra,
     ) -> "User":
+        # Set default starting resources based on game_models_template CSV
         user = cls(
             tg_id=tg_id,
             username=username,
             first_name=first_name,
             last_name=last_name,
             language_code=language_code,
-            **extra,
+            # Starting resources (can be overridden via extra)
+            money=extra.get('money', 2),
+            influence=extra.get('influence', 2),
+            information=extra.get('information', 2),
+            force=extra.get('force', 1),
+            base_money=extra.get('base_money', 2),
+            base_influence=extra.get('base_influence', 2),
+            base_information=extra.get('base_information', 2),
+            base_force=extra.get('base_force', 1),
+            available_actions=extra.get('available_actions', 5),
+            max_available_actions=extra.get('max_available_actions', 5),
+            actions_refresh_at=extra.get('actions_refresh_at', now_utc()),
+            **{k: v for k, v in extra.items() if k not in [
+                'money', 'influence', 'information', 'force',
+                'base_money', 'base_influence', 'base_information', 'base_force',
+                'available_actions', 'max_available_actions', 'actions_refresh_at'
+            ]},
         )
         session.add(user)
+        # Ensure action slots are properly initialized
+        user.ensure_action_slots_initialized()
+        
         await session.commit()
         await session.refresh(user)
         return user
+    
+    def ensure_action_slots_initialized(self):
+        """Ensure user has proper action slots initialized"""
+        # Fix max_available_actions if not set
+        if self.max_available_actions is None or self.max_available_actions <= 0:
+            self.max_available_actions = 5
+        
+        # Fix available_actions if not set or less than expected for new user
+        if self.available_actions is None or self.available_actions <= 0:
+            self.available_actions = self.max_available_actions
+        
+        # Set actions_refresh_at if not set
+        if self.actions_refresh_at is None:
+            self.actions_refresh_at = now_utc()
 
     @classmethod
     async def get_by_tg_id(cls, session, tg_id: int) -> Optional["User"]:
@@ -198,13 +232,13 @@ class District(Base):
     # Название района
     name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    # Владелец
-    owner_id: Mapped[int] = mapped_column(
+    # Владелец (может быть NULL для нейтральных районов)
+    owner_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         index=True,
-        nullable=False
+        nullable=True
     )
-    owner: Mapped["User"] = relationship(
+    owner: Mapped[Optional["User"]] = relationship(
         "User", back_populates="districts", lazy="selectin"
     )
 
@@ -242,8 +276,8 @@ class District(Base):
     base_force: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (
-        # Один и тот же владелец не может иметь два района с одинаковым именем
-        UniqueConstraint("owner_id", "name", name="uq_district_owner_name"),
+        # Один и тот же владелец не может иметь два района с одинаковым именем (если владелец есть)
+        # Но нейтральные районы (owner_id=NULL) могут иметь одинаковые имена
         Index("ix_district_owner_name", "owner_id", "name"),
     )
 
@@ -253,7 +287,7 @@ class District(Base):
             cls,
             session,
             name: str,
-            owner_id: int,
+            owner_id: Optional[int] = None,
             *,
             control_points: int = 0,
             control_level: ControlLevel = ControlLevel.MINIMAL,
@@ -285,10 +319,15 @@ class District(Base):
         return res.scalars().first()
 
     @classmethod
-    async def get_by_owner(cls, session, owner_id: int):
-        res = await session.execute(
-            select(cls).where(cls.owner_id == owner_id).order_by(cls.id)
-        )
+    async def get_by_owner(cls, session, owner_id: Optional[int]):
+        if owner_id is None:
+            res = await session.execute(
+                select(cls).where(cls.owner_id.is_(None)).order_by(cls.id)
+            )
+        else:
+            res = await session.execute(
+                select(cls).where(cls.owner_id == owner_id).order_by(cls.id)
+            )
         return res.scalars().all()
 
     @classmethod
@@ -390,6 +429,8 @@ class ActionType(PyEnum):
     SCOUT_DISTRICT = "scout_dist"
     SCOUT_INFO = "scout_info"
 
+    RITUAL = "ritual"
+
 
 class ActionStatus(PyEnum):
     DRAFT = "draft"
@@ -458,9 +499,17 @@ class Action(Base):
     money: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     influence: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     information: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    candles: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Ideology direction for influence: 1 for + (reforms), -1 for - (conservative), 0 for no direction
+    ideology_direction: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
 
     estimated_power: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     on_point: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    won_on_point: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
+    # For rituals: when the ritual should automatically complete
+    ritual_end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -488,7 +537,8 @@ class Action(Base):
             force: int = 0,
             money: int = 0,
             influence: int = 0,
-            information: int = 0
+            information: int = 0,
+            ideology_direction: int = 0
     ) -> "Action":
         obj = cls(
             owner_id=owner_id,
@@ -501,7 +551,8 @@ class Action(Base):
             force=force,
             money=money,
             influence=influence,
-            information=information
+            information=information,
+            ideology_direction=ideology_direction
         )
         session.add(obj)
         await session.commit()

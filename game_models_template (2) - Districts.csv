@@ -1,0 +1,12 @@
+Districts — импорт: create/update по id (если указан),,,,,,,,,
+Оставьте пустым для создания,Пример: Stari Grad,Владелец — tg_id пользователя,Пример: 0,Выпадающий список,Пример: 0.4,Пример: 100,Пример: 10,Пример: 5,Пример: 0
+id,name *,owner_tg_id *,control_points,control_level,resource_multiplier,base_money,base_influence,base_information,base_force
+int,str,int,int,enum,float,int,int,int,int
+,Stari Grad,,,,0.5,,2,1,
+,Liman,,,,0.5,,1,2,
+,Podbara,,,,0.5,2,,,1
+,Dunavska,,,,0.5,3,1,,
+,Petrovaradin,,,,0.5,,1,,3
+,Satelit ,,,,0.5,2,,,1
+,Grbavica,,,,0.5,,1,2,
+,Adamovićevo,,,,0.5,,2,1,

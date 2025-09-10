@@ -1,0 +1,11 @@
+{{ ritual.title }}
+
+{% for line in ritual.lines %}
+{{ line }}
+{% endfor %}
+
+{{ ritual.hint }}
+
+{% if ritual.error_text %}
+❌ {{ ritual.error_text }}
+{% endif %}

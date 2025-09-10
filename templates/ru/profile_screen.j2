@@ -18,6 +18,16 @@
 <b>🏛 Контролируемые районы:</b>
 {% if profile.districts.has_any -%}
 Всего: <b>{{ profile.districts.count }}</b>
+
+{% for district in profile.districts.list -%}
+• <b>{{ district.name }}</b>: {{ district.bonuses }}
+{% endfor %}
+<b>📈 Общие бонусы от районов:</b>
+{% if profile.districts.total_bonuses.money > 0 %}💰 +{{ profile.districts.total_bonuses.money }} {% endif -%}
+{%- if profile.districts.total_bonuses.influence > 0 %}🪙 +{{ profile.districts.total_bonuses.influence }} {% endif -%}
+{%- if profile.districts.total_bonuses.information > 0 %}🧠 +{{ profile.districts.total_bonuses.information }} {% endif -%}
+{%- if profile.districts.total_bonuses.force > 0 %}💪 +{{ profile.districts.total_bonuses.force }}{% endif -%}
+{%- if profile.districts.total_bonuses.money == 0 and profile.districts.total_bonuses.influence == 0 and profile.districts.total_bonuses.information == 0 and profile.districts.total_bonuses.force == 0 %}нет бонусов{% endif %}
 {%- else -%}
 Нет
 {%- endif %}
